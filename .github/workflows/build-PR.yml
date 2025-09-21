@@ -7,56 +7,268 @@ on:
   pull_request:
 
 jobs:
-  unix:
+  build-unix:
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu, macos]
+        os: [ubuntu-22.04, ubuntu-20.04, macos-13, macos-12]
         compiler: [g++, clang++]
+        build_type: [Release, Debug]
+        shared_lib: [ON, OFF]
         exclude:
-          - os: macos
+          # macOS doesn't have g++ (it's just an alias to clang++)
+          - os: macos-13
             compiler: g++
+          - os: macos-12
+            compiler: g++
+          # Reduce matrix size by testing shared lib variations only on latest OS
+          - os: ubuntu-20.04
+            shared_lib: OFF
+          - os: macos-12
+            shared_lib: OFF
 
-    name: ${{matrix.os}} (${{matrix.compiler}})
+    name: ${{matrix.os}} (${{matrix.compiler}}, ${{matrix.build_type}}, shared=${{matrix.shared_lib}})
 
-    runs-on: ${{matrix.os}}-latest
+    runs-on: ${{matrix.os}}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Install dependencies
+      # Cache dependencies to speed up builds
+      - name: Cache dependencies (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/apt
+            /var/cache/apt
+          key: ${{ runner.os }}-${{ matrix.os }}-deps-v2
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.os }}-deps-
+            ${{ runner.os }}-deps-
+
+      - name: Cache dependencies (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /opt/homebrew/var/homebrew/locks
+          key: ${{ runner.os }}-${{ matrix.os }}-deps-v2
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.os }}-deps-
+            ${{ runner.os }}-deps-
+
+      # Setup ccache for faster compilation
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.build_type }}
+          max-size: "2G"
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-            if [ "$RUNNER_OS" == "Linux" ]; then
-                sudo apt-get update
-                sudo apt-get install --yes libpng++-dev libunittest++-dev
-                sudo apt-get install --yes fonts-noto-cjk
-            elif [ "$RUNNER_OS" == "macOS" ]; then
-                brew install unittest-cpp
-                brew tap homebrew/cask
-                brew install --cask font-noto-sans-cjk 
+            sudo apt-get update
+            sudo apt-get install --yes \
+              libpng++-dev \
+              libunittest++-dev \
+              libfreetype6-dev \
+              libfontconfig1-dev \
+              zlib1g-dev \
+              fonts-noto-cjk \
+              ccache
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+            # Update brew first to avoid issues
+            brew update
+            # Install dependencies
+            brew install \
+              unittest-cpp \
+              freetype \
+              libpng \
+              fontconfig \
+              ccache
+            # Install fonts
+            brew tap homebrew/cask-fonts
+            brew install --cask font-noto-sans-cjk
+
+      - name: Setup compiler
+        shell: bash
+        run: |
+            if [ "${{ matrix.compiler }}" == "g++" ]; then
+              echo "CC=gcc" >> $GITHUB_ENV
+              echo "CXX=g++" >> $GITHUB_ENV
             else
-                echo "$RUNNER_OS not supported"
-                exit 1
+              echo "CC=clang" >> $GITHUB_ENV
+              echo "CXX=clang++" >> $GITHUB_ENV
             fi
+
+            # Setup ccache
+            echo "/usr/lib/ccache:/usr/local/opt/ccache/libexec" >> $GITHUB_PATH
+
+            # Verify compiler
+            ${{ matrix.compiler }} --version
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+            mkdir build && cd build
+            cmake -G "Unix Makefiles" \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+              -DLOMSE_BUILD_SHARED_LIB=${{ matrix.shared_lib }} \
+              -DLOMSE_BUILD_STATIC_LIB=${{ matrix.shared_lib == 'OFF' && 'ON' || 'OFF' }} \
+              -DLOMSE_BUILD_TESTS=ON \
+              -DLOMSE_RUN_TESTS=OFF \
+              -DLOMSE_ENABLE_PNG=ON \
+              -DLOMSE_ENABLE_COMPRESSION=ON \
+              -DLOMSE_ENABLE_FONTCONFIG=ON \
+              -DLOMSE_ENABLE_THREADS=ON \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              ..
 
       - name: Build
         shell: bash
         run: |
-            export CXX=${{matrix.compiler}}
-            $CXX --version
-            mkdir build && cd build
-            cmake -G "Unix Makefiles" -DLOMSE_RUN_TESTS=OFF ..
-            make
+            cd build
+            make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) VERBOSE=1
 
       - name: Run tests
         shell: bash
         run: |
             cd build
-            ./testlib
+            # Run tests with timeout to prevent hanging
+            timeout 300 ./testlib || exit_code=$?
+            if [ ${exit_code:-0} -eq 124 ]; then
+              echo "Tests timed out after 5 minutes"
+              exit 1
+            elif [ ${exit_code:-0} -ne 0 ]; then
+              echo "Tests failed with exit code $exit_code"
+              exit 1
+            fi
+            echo "All tests passed!"
 
-#      - name: Upload logs on fail
-#        if: ${{ failure() }}
-#        uses: actions/upload-artifact@v3
-#        with:
-#          name: Build failure logs
-#          path: ${{ runner.temp }}/build_logs
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lomse-${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.build_type }}-shared${{ matrix.shared_lib }}
+          path: |
+            build/liblomse*
+            build/testlib
+            build/lomse_config.h
+            build/lomse_version.h
+          retention-days: 7
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.build_type }}
+          path: |
+            build/test-*.xml
+            build/*.log
+          retention-days: 7
+
+  build-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2019]
+        toolset: [v143, v142]
+        arch: [x64, Win32]
+        build_type: [Release, Debug]
+        exclude:
+          # v143 is only available on VS2022 (windows-2022)
+          - os: windows-2019
+            toolset: v143
+          # v142 is only available on VS2019 (windows-2019)
+          - os: windows-2022
+            toolset: v142
+          # Reduce matrix size
+          - arch: Win32
+            build_type: Debug
+
+    name: ${{matrix.os}} (MSVC ${{matrix.toolset}}, ${{matrix.arch}}, ${{matrix.build_type}})
+
+    runs-on: ${{matrix.os}}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
+          vcpkgGitCommitId: 'latest'
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg
+            !${{ github.workspace }}/vcpkg/buildtrees
+            !${{ github.workspace }}/vcpkg/packages
+            !${{ github.workspace }}/vcpkg/downloads
+          key: vcpkg-${{ matrix.os }}-${{ matrix.arch }}-v2
+          restore-keys: |
+            vcpkg-${{ matrix.os }}-${{ matrix.arch }}-
+            vcpkg-${{ matrix.os }}-
+
+      - name: Install dependencies
+        shell: cmd
+        run: |
+            vcpkg install freetype:${{ matrix.arch }}-windows
+            vcpkg install libpng:${{ matrix.arch }}-windows
+            vcpkg install zlib:${{ matrix.arch }}-windows
+            vcpkg install unittest-cpp:${{ matrix.arch }}-windows
+
+      - name: Configure CMake
+        shell: cmd
+        run: |
+            mkdir build && cd build
+            cmake -G "Visual Studio 17 2022" ^
+              -A ${{ matrix.arch }} ^
+              -T ${{ matrix.toolset }} ^
+              -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" ^
+              -DVCPKG_TARGET_TRIPLET=${{ matrix.arch }}-windows ^
+              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ^
+              -DLOMSE_BUILD_SHARED_LIB=OFF ^
+              -DLOMSE_BUILD_STATIC_LIB=ON ^
+              -DLOMSE_BUILD_TESTS=ON ^
+              -DLOMSE_RUN_TESTS=OFF ^
+              -DLOMSE_ENABLE_PNG=ON ^
+              -DLOMSE_ENABLE_COMPRESSION=ON ^
+              -DLOMSE_ENABLE_FONTCONFIG=OFF ^
+              -DLOMSE_ENABLE_THREADS=ON ^
+              ..
+
+      - name: Build
+        shell: cmd
+        run: |
+            cd build
+            cmake --build . --config ${{ matrix.build_type }} --parallel %NUMBER_OF_PROCESSORS%
+
+      - name: Run tests
+        shell: cmd
+        run: |
+            cd build
+            .\${{ matrix.build_type }}\testlib.exe
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lomse-${{ matrix.os }}-${{ matrix.toolset }}-${{ matrix.arch }}-${{ matrix.build_type }}
+          path: |
+            build\${{ matrix.build_type }}\lomse*
+            build\${{ matrix.build_type }}\testlib.exe
+            build\lomse_config.h
+            build\lomse_version.h
+          retention-days: 7
+

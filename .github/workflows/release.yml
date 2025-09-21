@@ -1,0 +1,297 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0, v2.1.3, etc.
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  build-release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds
+          - os: ubuntu-22.04
+            arch: x64
+            cc: gcc
+            cxx: g++
+            artifact_name: lomse-linux-x64
+            shared_lib: ON
+          - os: ubuntu-22.04
+            arch: x64
+            cc: gcc
+            cxx: g++
+            artifact_name: lomse-linux-x64-static
+            shared_lib: OFF
+
+          # macOS builds
+          - os: macos-13
+            arch: x64
+            cc: clang
+            cxx: clang++
+            artifact_name: lomse-macos-x64
+            shared_lib: ON
+          - os: macos-13
+            arch: x64
+            cc: clang
+            cxx: clang++
+            artifact_name: lomse-macos-x64-static
+            shared_lib: OFF
+
+          # Windows builds
+          - os: windows-2022
+            arch: x64
+            artifact_name: lomse-windows-x64
+            shared_lib: OFF
+          - os: windows-2022
+            arch: Win32
+            artifact_name: lomse-windows-x86
+            shared_lib: OFF
+
+    name: Build ${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Cache dependencies
+      - name: Cache dependencies (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/apt
+            /var/cache/apt
+          key: release-${{ runner.os }}-${{ matrix.os }}-deps
+          restore-keys: |
+            release-${{ runner.os }}-deps
+
+      - name: Cache dependencies (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /opt/homebrew/var/homebrew/locks
+          key: release-${{ runner.os }}-${{ matrix.os }}-deps
+          restore-keys: |
+            release-${{ runner.os }}-deps
+
+      - name: Setup ccache
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: release-${{ matrix.os }}-${{ matrix.cc }}
+          max-size: "2G"
+
+      # Install dependencies
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libpng++-dev \
+            libunittest++-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            zlib1g-dev \
+            fonts-noto-cjk \
+            ccache
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install \
+            unittest-cpp \
+            freetype \
+            libpng \
+            fontconfig \
+            ccache
+
+      - name: Setup vcpkg (Windows)
+        if: runner.os == 'Windows'
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
+          vcpkgGitCommitId: 'latest'
+
+      - name: Cache vcpkg (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg
+            !${{ github.workspace }}/vcpkg/buildtrees
+            !${{ github.workspace }}/vcpkg/packages
+            !${{ github.workspace }}/vcpkg/downloads
+          key: release-vcpkg-${{ matrix.os }}-${{ matrix.arch }}
+          restore-keys: |
+            release-vcpkg-${{ matrix.os }}-
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          vcpkg install freetype:${{ matrix.arch }}-windows
+          vcpkg install libpng:${{ matrix.arch }}-windows
+          vcpkg install zlib:${{ matrix.arch }}-windows
+          vcpkg install unittest-cpp:${{ matrix.arch }}-windows
+
+      # Configure and build
+      - name: Setup compiler (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          echo "CC=${{ matrix.cc }}" >> $GITHUB_ENV
+          echo "CXX=${{ matrix.cxx }}" >> $GITHUB_ENV
+          echo "/usr/lib/ccache:/usr/local/opt/ccache/libexec" >> $GITHUB_PATH
+
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir build && cd build
+          cmake -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLOMSE_BUILD_SHARED_LIB=${{ matrix.shared_lib }} \
+            -DLOMSE_BUILD_STATIC_LIB=${{ matrix.shared_lib == 'OFF' && 'ON' || 'OFF' }} \
+            -DLOMSE_BUILD_TESTS=ON \
+            -DLOMSE_RUN_TESTS=OFF \
+            -DLOMSE_ENABLE_PNG=ON \
+            -DLOMSE_ENABLE_COMPRESSION=ON \
+            -DLOMSE_ENABLE_FONTCONFIG=ON \
+            -DLOMSE_ENABLE_THREADS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_INSTALL_PREFIX=../install \
+            ..
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          mkdir build && cd build
+          cmake -G "Visual Studio 17 2022" ^
+            -A ${{ matrix.arch }} ^
+            -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" ^
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.arch }}-windows ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DLOMSE_BUILD_SHARED_LIB=OFF ^
+            -DLOMSE_BUILD_STATIC_LIB=ON ^
+            -DLOMSE_BUILD_TESTS=ON ^
+            -DLOMSE_RUN_TESTS=OFF ^
+            -DLOMSE_ENABLE_PNG=ON ^
+            -DLOMSE_ENABLE_COMPRESSION=ON ^
+            -DLOMSE_ENABLE_FONTCONFIG=OFF ^
+            -DLOMSE_ENABLE_THREADS=ON ^
+            -DCMAKE_INSTALL_PREFIX=../install ^
+            ..
+
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd build
+          make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+          make install
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cd build
+          cmake --build . --config Release --parallel %NUMBER_OF_PROCESSORS%
+          cmake --install . --config Release
+
+      - name: Run tests
+        shell: bash
+        run: |
+          cd build
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            ./Release/testlib.exe
+          else
+            ./testlib
+          fi
+
+      # Package the release
+      - name: Package release (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd install
+          tar -czf ../${{ matrix.artifact_name }}.tar.gz *
+
+      - name: Package release (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cd install
+          7z a -tzip ../${{ matrix.artifact_name }}.zip *
+
+      # Upload artifact for this job
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_name }}.tar.gz
+            ${{ matrix.artifact_name }}.zip
+          retention-days: 30
+
+  create-release:
+    needs: build-release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f -name "*.tar.gz" -o -name "*.zip"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Lomse ${{ steps.version.outputs.version }}
+          body: |
+            ## Lomse ${{ steps.version.outputs.version }}
+
+            ### Downloads
+
+            **Linux:**
+            - `lomse-linux-x64.tar.gz` - Shared library build
+            - `lomse-linux-x64-static.tar.gz` - Static library build
+
+            **macOS:**
+            - `lomse-macos-x64.tar.gz` - Shared library build
+            - `lomse-macos-x64-static.tar.gz` - Static library build
+
+            **Windows:**
+            - `lomse-windows-x64.zip` - 64-bit static library build
+            - `lomse-windows-x86.zip` - 32-bit static library build
+
+            ### Installation
+
+            Extract the archive for your platform and follow the installation instructions in the README.
+
+            ### Changes
+
+            See the [commit history](https://github.com/lenmus/lomse/commits/${{ steps.version.outputs.version }}) for changes in this release.
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
