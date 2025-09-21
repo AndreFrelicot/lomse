@@ -1,67 +1,94 @@
-# For most projects, this workflow file will not need changing; you simply need
-# to commit it to your repository.
-#
-# You may wish to alter this file to override the set of languages analyzed,
-# or to provide custom queries or build logic.
-#
-# ******** NOTE ********
-# We have attempted to detect the languages in your repository. Please check
-# the `language` matrix defined below to confirm you have the correct set of
-# supported CodeQL languages.
-#
-name: "CodeQL"
+name: "CodeQL Security Analysis"
 
 on:
   push:
     branches: [ master ]
   pull_request:
-    # The branches below must be a subset of the branches above
     branches: [ master ]
   schedule:
-    - cron: '29 15 * * 4'
+    - cron: '29 15 * * 4'  # Every Thursday at 15:29 UTC
 
 jobs:
   analyze:
-    name: Analyze
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
 
     strategy:
       fail-fast: false
       matrix:
         language: [ 'cpp' ]
-        # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python' ]
-        # Learn more:
-        # https://docs.github.com/en/free-pro-team@latest/github/finding-security-vulnerabilities-and-errors-in-your-code/configuring-code-scanning#changing-the-languages-that-are-analyzed
+        # CodeQL supports [ 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'swift' ]
+        # Use only 'c-cpp' to analyze code written in C, C++, or Objective-C
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
-    # Initializes the CodeQL tools for scanning.
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/apt
+          /var/cache/apt
+        key: codeql-ubuntu-deps-v2
+        restore-keys: |
+          codeql-ubuntu-deps-
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes \
+          libpng++-dev \
+          libunittest++-dev \
+          libfreetype6-dev \
+          libfontconfig1-dev \
+          zlib1g-dev
+
+    # Initializes the CodeQL tools for scanning
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v1
+      uses: github/codeql-action/init@v3
       with:
         languages: ${{ matrix.language }}
-        # If you wish to specify custom queries, you can do so here or in a config file.
-        # By default, queries listed here will override any specified in a config file.
-        # Prefix the list here with "+" to use these queries and those in the config file.
-        # queries: ./path/to/local/query, your-org/your-repo/queries@main
+        # Override language selection by uncommenting this and choosing your languages
+        # with:
+        # languages: c-cpp, javascript
+        # Learn more about CodeQL language support at https://aka.ms/codeql-docs/language-support
+        config: |
+          paths:
+            - src
+            - include
+          paths-ignore:
+            - src/tests
+            - examples
+            - packages
+          queries:
+            - uses: security-and-quality
+            - uses: security-extended
 
-    # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).
-    # If this step fails, then you should remove it and run the build manually (see below)
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@v1
-
-    # ℹ️ Command-line programs to run using the OS shell.
-    # 📚 https://git.io/JvXDl
-
-    # ✏️ If the Autobuild fails above, remove it and uncomment the following three lines
-    #    and modify them (or add more) to build your code if your project
-    #    uses a compiled language
-
-    #- run: |
-    #   make bootstrap
-    #   make release
+    # Build the project manually instead of using autobuild for better control
+    - name: Build project
+      run: |
+        mkdir build && cd build
+        cmake -G "Unix Makefiles" \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DLOMSE_BUILD_SHARED_LIB=ON \
+          -DLOMSE_BUILD_STATIC_LIB=OFF \
+          -DLOMSE_BUILD_TESTS=OFF \
+          -DLOMSE_ENABLE_PNG=ON \
+          -DLOMSE_ENABLE_COMPRESSION=ON \
+          -DLOMSE_ENABLE_FONTCONFIG=ON \
+          -DLOMSE_ENABLE_THREADS=ON \
+          ..
+        make -j$(nproc) lomse-shared
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v1
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{matrix.language}}"
+        # Upload results to GitHub Security tab
+        upload: true

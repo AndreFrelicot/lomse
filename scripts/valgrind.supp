@@ -1,0 +1,100 @@
+# Valgrind suppressions for Lomse
+# This file contains suppressions for known issues that are not actual bugs
+
+# FontConfig suppressions (common false positives)
+{
+   fontconfig_FcConfigAppFontAddFile
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:FcConfigAppFontAddFile
+   ...
+}
+
+{
+   fontconfig_cache_leak
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   obj:*/libfontconfig.so.*
+   ...
+}
+
+# FreeType suppressions
+{
+   freetype_init_leak
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:FT_*
+   ...
+}
+
+# PNG library suppressions
+{
+   png_init_leak
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   obj:*/libpng*.so.*
+   ...
+}
+
+# System library suppressions
+{
+   glibc_dl_init
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:_dl_*
+   ...
+}
+
+{
+   glibc_malloc
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:malloc
+   fun:_dl_*
+   ...
+}
+
+# C++ standard library suppressions
+{
+   stdcpp_once_flag
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:_ZN9__gnu_cxx27__verbose_terminate_handlerEv
+   ...
+}
+
+# Thread-related suppressions
+{
+   pthread_create
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:pthread_create*
+   ...
+}
+
+# Suppress some common false positives in graphics libraries
+{
+   graphics_lib_init
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   obj:*/libX11.so.*
+   ...
+}
+
+{
+   graphics_lib_init2
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   obj:*/libxcb.so.*
+   ...
+}
