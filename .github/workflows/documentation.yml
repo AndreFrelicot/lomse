@@ -211,9 +211,9 @@ jobs:
 
       - name: Check internal links
         run: |
-          if [ -f "docs/index.html" ]; then
+          if [ -f "docs/html/index.html" ]; then
             # Check internal links in the documentation
-            linkchecker --check-extern docs/index.html > link-check-results.txt 2>&1 || echo "Link issues found"
+            linkchecker --check-extern docs/html/index.html > link-check-results.txt 2>&1 || echo "Link issues found"
 
             # Extract summary
             if grep -q "That's it" link-check-results.txt; then
@@ -223,7 +223,7 @@ jobs:
               echo "⚠️ Link checker encountered issues"
             fi
           else
-            echo "❌ Documentation not found"
+            echo "❌ Documentation not found at docs/html/index.html"
             exit 1
           fi
 
