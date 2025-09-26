@@ -52,6 +52,9 @@ LyricEngraver::LyricEngraver(LibraryScope& libraryScope, ScoreMeter* pScoreMeter
 //---------------------------------------------------------------------------------------
 LyricEngraver::~LyricEngraver()
 {
+    for (auto pInfo : m_shapesInfo)
+        delete pInfo;
+    m_shapesInfo.clear();
 }
 
 //---------------------------------------------------------------------------------------
@@ -144,6 +147,8 @@ void LyricEngraver::prepare_for_next_system()
     //       it will be cleared here and this method will be invoked by
     //       SystemLayouter::add_lyrics_shapes_to_model() when appropriate.
     m_lyrics.clear();
+    for (auto pInfo : m_shapesInfo)
+        delete pInfo;
     m_shapesInfo.clear();
 }
 

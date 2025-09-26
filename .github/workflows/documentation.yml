@@ -1,0 +1,236 @@
+name: Documentation
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  schedule:
+    - cron: '0 6 * * 0'  # Every Sunday at 6:00 AM UTC
+  workflow_dispatch:     # Allow manual triggering
+
+jobs:
+  build-docs:
+    name: Build Documentation
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/apt
+            /var/cache/apt
+          key: docs-ubuntu-deps-v1
+          restore-keys: |
+            docs-ubuntu-deps-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            doxygen \
+            graphviz \
+            texlive-latex-base \
+            texlive-latex-extra \
+            texlive-fonts-recommended \
+            libpng++-dev \
+            libunittest++-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            zlib1g-dev
+
+      - name: Check if Doxygen config exists
+        id: doxygen_check
+        run: |
+          if [ -f "Doxyfile" ] || [ -f "docs/Doxyfile" ] || [ -f "doc/Doxyfile" ]; then
+            echo "config_exists=true" >> $GITHUB_OUTPUT
+            if [ -f "Doxyfile" ]; then
+              echo "config_path=Doxyfile" >> $GITHUB_OUTPUT
+            elif [ -f "docs/Doxyfile" ]; then
+              echo "config_path=docs/Doxyfile" >> $GITHUB_OUTPUT
+            else
+              echo "config_path=doc/Doxyfile" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "config_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Doxygen configuration
+        if: steps.doxygen_check.outputs.config_exists == 'false'
+        run: |
+          mkdir -p docs
+          cat > docs/Doxyfile << 'EOF'
+          # Doxygen configuration for Lomse
+          PROJECT_NAME           = "Lomse"
+          PROJECT_NUMBER         = "Latest"
+          PROJECT_BRIEF          = "C++ library for rendering, editing and playing back music scores"
+
+          OUTPUT_DIRECTORY       = docs/html
+
+          INPUT                  = include/ src/
+          RECURSIVE              = YES
+
+          FILE_PATTERNS          = *.h *.hpp *.cpp *.c *.md
+
+          EXCLUDE_PATTERNS       = */tests/* */test/* *test*.cpp *test*.h
+
+          EXTRACT_ALL            = YES
+          EXTRACT_PRIVATE        = NO
+          EXTRACT_STATIC         = YES
+
+          GENERATE_HTML          = YES
+          HTML_OUTPUT            = .
+          HTML_FILE_EXTENSION    = .html
+
+          GENERATE_LATEX         = YES
+          LATEX_OUTPUT           = latex
+
+          HAVE_DOT               = YES
+          DOT_GRAPH_MAX_NODES    = 100
+
+          CLASS_DIAGRAMS         = YES
+          COLLABORATION_GRAPH    = YES
+          GROUP_GRAPHS           = YES
+          INCLUDE_GRAPH          = YES
+          INCLUDED_BY_GRAPH      = YES
+          CALL_GRAPH             = YES
+          CALLER_GRAPH           = YES
+
+          SOURCE_BROWSER         = YES
+          INLINE_SOURCES         = NO
+
+          SEARCHENGINE           = YES
+          SERVER_BASED_SEARCH    = NO
+
+          GENERATE_TREEVIEW      = YES
+          TREEVIEW_WIDTH         = 250
+          EOF
+          echo "config_path=docs/Doxyfile" >> $GITHUB_OUTPUT
+
+      - name: Generate documentation
+        run: |
+          # Use the detected or created Doxygen config
+          config_path="${{ steps.doxygen_check.outputs.config_path }}"
+          if [ -z "$config_path" ]; then
+            config_path="docs/Doxyfile"
+          fi
+
+          echo "Using Doxygen config: $config_path"
+          doxygen "$config_path"
+
+          # Check if documentation was generated
+          if [ -d "docs/html" ]; then
+            echo "✅ HTML documentation generated successfully"
+            echo "Pages generated: $(find docs/html -name "*.html" | wc -l)"
+          fi
+
+          if [ -d "docs/latex" ]; then
+            echo "✅ LaTeX documentation generated successfully"
+            # Try to build PDF if LaTeX was generated
+            cd docs/latex
+            if make pdf > /dev/null 2>&1; then
+              echo "✅ PDF documentation built successfully"
+              mv refman.pdf ../lomse-documentation.pdf
+            else
+              echo "⚠️ PDF generation failed, but LaTeX sources are available"
+            fi
+          fi
+
+      - name: Check documentation quality
+        run: |
+          # Check for common documentation issues
+          echo "=== Documentation Quality Report ===" > docs/quality-report.txt
+
+          # Count documented vs undocumented functions
+          if [ -d "docs/html" ]; then
+            # Check if there are any undocumented warnings in the log
+            if [ -f "docs/doxygen.log" ]; then
+              warnings=$(grep -c "Warning:" docs/doxygen.log || echo "0")
+              echo "Doxygen warnings: $warnings" >> docs/quality-report.txt
+            fi
+
+            # Count HTML files generated
+            html_count=$(find docs/html -name "*.html" | wc -l)
+            echo "HTML pages generated: $html_count" >> docs/quality-report.txt
+
+            # Check for index page
+            if [ -f "docs/html/index.html" ]; then
+              echo "✅ Main index page exists" >> docs/quality-report.txt
+            else
+              echo "❌ Main index page missing" >> docs/quality-report.txt
+            fi
+          fi
+
+          cat docs/quality-report.txt
+
+      - name: Upload documentation artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: documentation
+          path: |
+            docs/html/
+            docs/lomse-documentation.pdf
+            docs/quality-report.txt
+            docs/doxygen.log
+          retention-days: 30
+
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docs/html
+          destination_dir: api-docs
+
+  check-links:
+    name: Check Documentation Links
+    runs-on: ubuntu-22.04
+    needs: build-docs
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: documentation
+          path: docs
+
+      - name: Install link checker
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes linkchecker
+
+      - name: Check internal links
+        run: |
+          if [ -f "docs/html/index.html" ]; then
+            # Check internal links in the documentation
+            linkchecker --check-extern docs/html/index.html > link-check-results.txt 2>&1 || echo "Link issues found"
+
+            # Extract summary
+            if grep -q "That's it" link-check-results.txt; then
+              echo "✅ Documentation links check completed"
+              grep -A 10 "Statistics:" link-check-results.txt
+            else
+              echo "⚠️ Link checker encountered issues"
+            fi
+          else
+            echo "❌ Documentation not found at docs/html/index.html"
+            exit 1
+          fi
+
+      - name: Upload link check results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: link-check-results
+          path: link-check-results.txt
+          retention-days: 7
