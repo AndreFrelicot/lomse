@@ -12,42 +12,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux builds
+          # Linux - latest LTS with shared library
           - os: ubuntu-22.04
             arch: x64
             cc: gcc
             cxx: g++
             artifact_name: lomse-linux-x64
             shared_lib: ON
-          - os: ubuntu-22.04
-            arch: x64
-            cc: gcc
-            cxx: g++
-            artifact_name: lomse-linux-x64-static
-            shared_lib: OFF
 
-          # macOS builds
+          # macOS - latest stable with shared library
           - os: macos-13
             arch: x64
             cc: clang
             cxx: clang++
             artifact_name: lomse-macos-x64
             shared_lib: ON
-          - os: macos-13
-            arch: x64
-            cc: clang
-            cxx: clang++
-            artifact_name: lomse-macos-x64-static
-            shared_lib: OFF
 
-          # Windows builds
+          # Windows - latest with static library (x64 only)
           - os: windows-2022
             arch: x64
             artifact_name: lomse-windows-x64
-            shared_lib: OFF
-          - os: windows-2022
-            arch: Win32
-            artifact_name: lomse-windows-x86
             shared_lib: OFF
 
     name: Build ${{ matrix.artifact_name }}
@@ -270,16 +254,13 @@ jobs:
             ### Downloads
 
             **Linux:**
-            - `lomse-linux-x64.tar.gz` - Shared library build
-            - `lomse-linux-x64-static.tar.gz` - Static library build
+            - `lomse-linux-x64.tar.gz` - Shared library build for Ubuntu 22.04
 
             **macOS:**
-            - `lomse-macos-x64.tar.gz` - Shared library build
-            - `lomse-macos-x64-static.tar.gz` - Static library build
+            - `lomse-macos-x64.tar.gz` - Shared library build for macOS 13
 
             **Windows:**
-            - `lomse-windows-x64.zip` - 64-bit static library build
-            - `lomse-windows-x86.zip` - 32-bit static library build
+            - `lomse-windows-x64.zip` - 64-bit static library build for Windows 2022
 
             ### Installation
 

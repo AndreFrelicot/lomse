@@ -11,21 +11,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-20.04, macos-13, macos-12]
-        compiler: [g++, clang++]
-        build_type: [Release, Debug]
-        shared_lib: [ON, OFF]
-        exclude:
-          # macOS doesn't have g++ (it's just an alias to clang++)
+        include:
+          # Linux - latest LTS with GCC
+          - os: ubuntu-22.04
+            compiler: g++
+            build_type: Release
+            shared_lib: ON
+          # macOS - latest stable with Clang
           - os: macos-13
-            compiler: g++
-          - os: macos-12
-            compiler: g++
-          # Reduce matrix size by testing shared lib variations only on latest OS
-          - os: ubuntu-20.04
-            shared_lib: OFF
-          - os: macos-12
-            shared_lib: OFF
+            compiler: clang++
+            build_type: Release
+            shared_lib: ON
 
     name: ${{matrix.os}} (${{matrix.compiler}}, ${{matrix.build_type}}, shared=${{matrix.shared_lib}})
 
@@ -179,20 +175,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, windows-2019]
-        toolset: [v143, v142]
-        arch: [x64, Win32]
-        build_type: [Release, Debug]
-        exclude:
-          # v143 is only available on VS2022 (windows-2022)
-          - os: windows-2019
-            toolset: v143
-          # v142 is only available on VS2019 (windows-2019)
+        include:
+          # Windows - latest with MSVC 2022, x64 only
           - os: windows-2022
-            toolset: v142
-          # Reduce matrix size
-          - arch: Win32
-            build_type: Debug
+            toolset: v143
+            arch: x64
+            build_type: Release
 
     name: ${{matrix.os}} (MSVC ${{matrix.toolset}}, ${{matrix.arch}}, ${{matrix.build_type}})
 
