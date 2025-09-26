@@ -98,3 +98,21 @@
    obj:*/libxcb.so.*
    ...
 }
+
+# Wide string comparison optimizations can cause false positives
+{
+   wstring_comparison_optimized
+   Memcheck:InvalidRead
+   fun:__wmemcmp_avx2_movbe
+   fun:*compare*
+   ...
+}
+
+{
+   wstring_comparison_avx2
+   Memcheck:InvalidRead
+   fun:__wmemcmp_avx2_movbe
+   ...
+   fun:*get_text*
+   ...
+}
