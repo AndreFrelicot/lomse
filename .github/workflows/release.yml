@@ -101,7 +101,7 @@ jobs:
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-          vcpkgGitCommitId: 'latest'
+          vcpkgGitCommitId: '2e6fcc44573d091af0321f99c89b212997a76f1f'
 
       - name: Cache vcpkg (Windows)
         if: runner.os == 'Windows'
